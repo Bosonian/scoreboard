@@ -534,8 +534,13 @@ const RettungsdienstScoreboard = ({ cases, results, settings }) => {
 };
 
 export default function App() {
-  const [view, setView] = useState('scoreboard');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [view, setView] = useState(() => {
+    const remembered = localStorage.getItem('igfap_remembered');
+    return remembered === 'true' ? 'research' : 'scoreboard';
+  });
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    return localStorage.getItem('igfap_remembered') === 'true';
+  });
   const [showLogin, setShowLogin] = useState(false);
   const [cases, setCases] = useState([
     { id: 'DRKLB013', timestamp: '2025-01-13 08:32', rettungswache: 'DRK Ludwigsburg', ichProb: 78, lvoProb: 34 },
@@ -579,10 +584,14 @@ export default function App() {
   const LoginContent = () => {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
+    const [rememberMe, setRememberMe] = useState(false);
     const [error, setError] = useState('');
 
     const handleSubmit = () => {
       if (username === 'research' && password === 'igfap2025') {
+        if (rememberMe) {
+          localStorage.setItem('igfap_remembered', 'true');
+        }
         setIsLoggedIn(true);
         setShowLogin(false);
         setView('research');
@@ -615,6 +624,16 @@ export default function App() {
           />
         </div>
 
+        <label className="flex items-center gap-3 cursor-pointer group">
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(e) => setRememberMe(e.target.checked)}
+            className="w-4 h-4 rounded bg-white/10 border-white/20 text-violet-500 focus:ring-violet-500/50"
+          />
+          <span className="text-white/50 group-hover:text-white/70 transition-colors text-sm">Remember me</span>
+        </label>
+
         {error && (
           <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
             {error}
@@ -644,7 +663,7 @@ export default function App() {
         setSelectedCase={setSelectedCase}
         settings={settings}
         setSettings={setSettings}
-        onLogout={() => { setIsLoggedIn(false); setView('scoreboard'); }}
+        onLogout={() => { localStorage.removeItem('igfap_remembered'); setIsLoggedIn(false); setView('scoreboard'); }}
       />
     );
   }
