@@ -35,18 +35,19 @@ const SettingsPanel = ({ settings, setSettings, onClose }) => {
         <div className="p-6 space-y-6">
           <div>
             <label className="block text-white/80 font-medium mb-3">Prediction Cutoff Threshold</label>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
               <input
-                type="range"
-                min="50"
-                max="90"
+                type="number"
+                min="1"
+                max="99"
                 value={settings.cutoff}
-                onChange={(e) => setSettings({ ...settings, cutoff: parseInt(e.target.value) })}
-                className="flex-1 h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 65;
+                  setSettings({ ...settings, cutoff: Math.min(99, Math.max(1, val)) });
+                }}
+                className="w-20 px-3 py-2 bg-slate-800 border border-white/20 rounded-xl text-white text-center font-bold focus:outline-none focus:ring-2 focus:ring-violet-500"
               />
-              <div className="w-16 px-3 py-2 bg-white/[0.05] border border-white/[0.1] rounded-lg text-center">
-                <span className="text-white font-bold">{settings.cutoff}%</span>
-              </div>
+              <span className="text-white/60">%</span>
             </div>
             <p className="text-white/40 text-sm mt-2">≥{settings.cutoff}% = Positive, &lt;{settings.cutoff}% = Negative</p>
           </div>
