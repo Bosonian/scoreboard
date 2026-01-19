@@ -23,82 +23,6 @@ const GlassCard = ({ children, className = '' }) => (
   </div>
 );
 
-const LoginScreen = ({ onLogin }) => {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-
-  const handleSubmit = () => {
-    if (username === 'research' && password === 'igfap2025') {
-      onLogin(true);
-    } else {
-      setError('Invalid credentials');
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-violet-950 flex items-center justify-center p-6">
-      <div className="fixed top-1/4 left-1/4 w-96 h-96 bg-violet-500/20 rounded-full blur-[128px] pointer-events-none"></div>
-      <div className="fixed bottom-1/4 right-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-[128px] pointer-events-none"></div>
-
-      <div className="w-full max-w-md relative z-10">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-3 mb-4">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-lg shadow-violet-500/30 border border-white/20">
-              <span className="text-white font-bold text-2xl">i</span>
-            </div>
-          </div>
-          <h1 className="text-3xl font-bold text-white">iGFAP Research Portal</h1>
-          <p className="text-white/50 mt-2">CT Befund Entry System</p>
-        </div>
-
-        <GlassCard className="rounded-3xl p-8">
-          <div className="space-y-5">
-            <div>
-              <label className="block text-white/70 text-sm font-medium mb-2">Username</label>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-800 border border-white/20 rounded-xl text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-all"
-                placeholder="Enter username"
-              />
-            </div>
-            <div>
-              <label className="block text-white/70 text-sm font-medium mb-2">Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-800 border border-white/20 rounded-xl text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-all"
-                placeholder="Enter password"
-              />
-            </div>
-
-            {error && (
-              <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
-                {error}
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={handleSubmit}
-              className="w-full py-3.5 bg-gradient-to-r from-violet-500 to-purple-600 text-white font-semibold rounded-xl hover:from-violet-400 hover:to-purple-500 transition-all shadow-lg shadow-violet-500/25 border border-white/10 cursor-pointer"
-            >
-              Login
-            </button>
-          </div>
-
-          <div className="mt-6 pt-6 border-t border-white/[0.05] text-center">
-            <p className="text-white/30 text-xs">Demo: research / igfap2025</p>
-          </div>
-        </GlassCard>
-      </div>
-    </div>
-  );
-};
-
 const SettingsPanel = ({ settings, setSettings, onClose }) => {
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-6">
@@ -609,8 +533,9 @@ const RettungsdienstScoreboard = ({ cases, results, settings }) => {
 };
 
 export default function App() {
-  const [view, setView] = useState('research');
+  const [view, setView] = useState('scoreboard');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
   const [cases, setCases] = useState([
     { id: 'DRKLB013', timestamp: '2025-01-13 08:32', rettungswache: 'DRK Ludwigsburg', ichProb: 78, lvoProb: 34 },
     { id: 'DRKLB014', timestamp: '2025-01-13 11:15', rettungswache: 'DRK Ludwigsburg', ichProb: 45, lvoProb: 82 },
@@ -629,30 +554,114 @@ export default function App() {
   const [selectedCase, setSelectedCase] = useState(null);
   const [settings, setSettings] = useState({ cutoff: 65, showTimestamp: true, showRettungswache: false });
 
-  if (view === 'research' && !isLoggedIn) {
+  // Login modal
+  const LoginModal = () => (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-6">
+      <div className="w-full max-w-md relative">
+        <button
+          onClick={() => setShowLogin(false)}
+          className="absolute -top-12 right-0 text-white/50 hover:text-white text-sm"
+        >
+          Cancel
+        </button>
+        <GlassCard className="rounded-3xl p-8">
+          <div className="text-center mb-6">
+            <h2 className="text-xl font-bold text-white">Research Login</h2>
+            <p className="text-white/40 text-sm mt-1">CT Befund Entry System</p>
+          </div>
+          <LoginContent />
+        </GlassCard>
+      </div>
+    </div>
+  );
+
+  const LoginContent = () => {
+    const [username, setUsername] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState('');
+
+    const handleSubmit = () => {
+      if (username === 'research' && password === 'igfap2025') {
+        setIsLoggedIn(true);
+        setShowLogin(false);
+        setView('research');
+      } else {
+        setError('Invalid credentials');
+      }
+    };
+
     return (
-      <>
-        <div className="fixed top-4 right-4 z-50 flex bg-white/[0.05] backdrop-blur-xl rounded-full p-1 border border-white/[0.1] shadow-lg">
-          <button onClick={() => setView('research')} className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${view === 'research' ? 'bg-violet-500 text-white shadow-lg shadow-violet-500/30' : 'text-white/50 hover:text-white'}`}>Research Portal</button>
-          <button onClick={() => setView('scoreboard')} className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${view === 'scoreboard' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30' : 'text-white/50 hover:text-white'}`}>RD Scoreboard</button>
+      <div className="space-y-5">
+        <div>
+          <label className="block text-white/70 text-sm font-medium mb-2">Username</label>
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            className="w-full px-4 py-3 bg-slate-800 border border-white/20 rounded-xl text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-all"
+            placeholder="Enter username"
+          />
         </div>
-        <LoginScreen onLogin={setIsLoggedIn} />
-      </>
+        <div>
+          <label className="block text-white/70 text-sm font-medium mb-2">Password</label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+            className="w-full px-4 py-3 bg-slate-800 border border-white/20 rounded-xl text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-all"
+            placeholder="Enter password"
+          />
+        </div>
+
+        {error && (
+          <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
+            {error}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={handleSubmit}
+          className="w-full py-3.5 bg-gradient-to-r from-violet-500 to-purple-600 text-white font-semibold rounded-xl hover:from-violet-400 hover:to-purple-500 transition-all shadow-lg shadow-violet-500/25 border border-white/10 cursor-pointer"
+        >
+          Login
+        </button>
+      </div>
+    );
+  };
+
+  // If logged in and viewing research portal
+  if (isLoggedIn && view === 'research') {
+    return (
+      <ResearchPortal
+        cases={cases}
+        setCases={setCases}
+        results={results}
+        setResults={setResults}
+        selectedCase={selectedCase}
+        setSelectedCase={setSelectedCase}
+        settings={settings}
+        setSettings={setSettings}
+        onLogout={() => { setIsLoggedIn(false); setView('scoreboard'); }}
+      />
     );
   }
 
+  // Default: Scoreboard view with small login button
   return (
     <div>
-      <div className="fixed top-4 right-4 z-50 flex bg-white/[0.05] backdrop-blur-xl rounded-full p-1 border border-white/[0.1] shadow-lg">
-        <button onClick={() => setView('research')} className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${view === 'research' ? 'bg-violet-500 text-white shadow-lg shadow-violet-500/30' : 'text-white/50 hover:text-white'}`}>Research Portal</button>
-        <button onClick={() => setView('scoreboard')} className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${view === 'scoreboard' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30' : 'text-white/50 hover:text-white'}`}>RD Scoreboard</button>
-      </div>
+      {showLogin && <LoginModal />}
 
-      {view === 'research' ? (
-        <ResearchPortal cases={cases} setCases={setCases} results={results} setResults={setResults} selectedCase={selectedCase} setSelectedCase={setSelectedCase} settings={settings} setSettings={setSettings} onLogout={() => setIsLoggedIn(false)} />
-      ) : (
-        <RettungsdienstScoreboard cases={cases} results={results} settings={settings} />
-      )}
+      {/* Small login button in bottom right */}
+      <button
+        onClick={() => setShowLogin(true)}
+        className="fixed bottom-4 right-4 z-40 px-3 py-1.5 bg-white/[0.05] backdrop-blur-xl border border-white/[0.1] rounded-lg text-white/40 hover:text-white/70 hover:bg-white/[0.1] transition-all text-xs"
+      >
+        Research Login
+      </button>
+
+      <RettungsdienstScoreboard cases={cases} results={results} settings={settings} />
     </div>
   );
 }
