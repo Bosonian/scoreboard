@@ -110,8 +110,12 @@ const getConfidenceColor = (prob, cutoff) => {
 // 22px blur preserves soft shapes from the ambulance — real bokeh, not a color wash
 // GPU-composited: translateZ(0) + will-change prevent mobile scroll repaint bugs
 const BokehBackground = () => (
-  <div className="fixed inset-0 z-0 overflow-hidden"
-    style={{ willChange: 'transform', transform: 'translateZ(0)', backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden' }}>
+  <div className="fixed z-0 overflow-hidden"
+    style={{
+      top: '-120px', left: 0, right: 0, bottom: '-120px',
+      willChange: 'transform', transform: 'translateZ(0)',
+      backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden',
+    }}>
     <div
       style={{
         position: 'absolute',
