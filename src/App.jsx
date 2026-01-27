@@ -108,8 +108,10 @@ const getConfidenceColor = (prob, cutoff) => {
 
 // ===================== BOKEH BACKGROUND =====================
 // 22px blur preserves soft shapes from the ambulance — real bokeh, not a color wash
+// GPU-composited: translateZ(0) + will-change prevent mobile scroll repaint bugs
 const BokehBackground = () => (
-  <div className="fixed inset-0 z-0 overflow-hidden">
+  <div className="fixed inset-0 z-0 overflow-hidden"
+    style={{ willChange: 'transform', transform: 'translateZ(0)', backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden' }}>
     <div
       style={{
         position: 'absolute',
@@ -118,7 +120,10 @@ const BokehBackground = () => (
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         filter: 'blur(22px) brightness(1.08) saturate(1.35)',
-        transform: 'scale(1.06)',
+        transform: 'scale(1.06) translateZ(0)',
+        willChange: 'transform',
+        backfaceVisibility: 'hidden',
+        WebkitBackfaceVisibility: 'hidden',
       }}
     />
     {/* Warm white veil */}
