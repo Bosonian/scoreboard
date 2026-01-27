@@ -103,6 +103,26 @@ const formatDateDE = (dateStr) => {
   return dateStr;
 };
 
+// Auto-generate case ID from station name: "DRK Ludwigsburg" → "DRKLB", + next number
+const generateCaseId = (station, existingCases) => {
+  if (!station) return '';
+  const words = station.split(/\s+/);
+  let prefix = '';
+  if (words.length >= 2) {
+    prefix = words[0].substring(0, 3).toUpperCase() + words.slice(1).map(w => w[0]).join('').toUpperCase();
+  } else {
+    prefix = station.substring(0, 4).toUpperCase();
+  }
+  const existing = existingCases.filter(c => c.id.startsWith(prefix)).map(c => parseInt(c.id.replace(prefix, '')) || 0);
+  const next = existing.length > 0 ? Math.max(...existing) + 1 : 1;
+  return `${prefix}${String(next).padStart(3, '0')}`;
+};
+
+const todayDE = () => {
+  const d = new Date();
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+};
+
 const getConfidenceColor = (prob, cutoff) => {
   if (prob >= cutoff) return { bg: 'from-emerald-500 to-emerald-600' };
   return { bg: 'from-blue-500 to-blue-600' };
@@ -114,9 +134,10 @@ const getConfidenceColor = (prob, cutoff) => {
 const BokehBackground = () => (
   <div className="fixed z-0 overflow-hidden"
     style={{
-      top: '-120px', left: 0, right: 0, bottom: '-120px',
+      top: '-200px', left: '-20px', right: '-20px', bottom: '-200px',
       willChange: 'transform', transform: 'translateZ(0)',
       backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden',
+      WebkitTransform: 'translateZ(0)',
     }}>
     <div
       style={{
@@ -513,6 +534,214 @@ const SettingsPanel = ({ settings, setSettings, onClose }) => (
   </div>
 );
 
+// ===================== ANALYTICS HELPERS =====================
+const computeConfusion = (cases, results, cutoff, type) => {
+  // type = 'ich' or 'lvo', probField = 'ichProb' or 'lvoProb'
+  const probField = type === 'ich' ? 'ichProb' : 'lvoProb';
+  let tp = 0, fp = 0, fn = 0, tn = 0;
+  cases.forEach(c => {
+    const r = results[c.id]?.[type];
+    if (!r || r === 'na') return;
+    const pred = c[probField] >= cutoff ? 'positive' : 'negative';
+    if (pred === 'positive' && r === 'confirmed') tp++;
+    else if (pred === 'positive' && r === 'ruled_out') fp++;
+    else if (pred === 'negative' && r === 'confirmed') fn++;
+    else if (pred === 'negative' && r === 'ruled_out') tn++;
+  });
+  const n = tp + fp + fn + tn;
+  const sens = (tp + fn) > 0 ? tp / (tp + fn) : null;
+  const spec = (tn + fp) > 0 ? tn / (tn + fp) : null;
+  const ppv = (tp + fp) > 0 ? tp / (tp + fp) : null;
+  const npv = (tn + fn) > 0 ? tn / (tn + fn) : null;
+  return { tp, fp, fn, tn, n, sens, spec, ppv, npv };
+};
+
+const computeCalibration = (cases, results, type) => {
+  const probField = type === 'ich' ? 'ichProb' : 'lvoProb';
+  const bins = [{ lo: 0, hi: 20 }, { lo: 20, hi: 40 }, { lo: 40, hi: 60 }, { lo: 60, hi: 80 }, { lo: 80, hi: 100 }];
+  return bins.map(b => {
+    let total = 0, events = 0;
+    cases.forEach(c => {
+      const r = results[c.id]?.[type];
+      if (!r || r === 'na') return;
+      const p = c[probField];
+      if (p >= b.lo && p < (b.hi === 100 ? 101 : b.hi)) {
+        total++;
+        if (r === 'confirmed') events++;
+      }
+    });
+    return { label: `${b.lo}-${b.hi}`, mid: (b.lo + b.hi) / 2, total, events, rate: total > 0 ? events / total * 100 : null };
+  });
+};
+
+const findOptimalCutoff = (cases, results, type) => {
+  const probField = type === 'ich' ? 'ichProb' : 'lvoProb';
+  let bestJ = -1, bestCut = 50;
+  for (let cut = 5; cut <= 95; cut += 5) {
+    const { sens, spec } = computeConfusion(cases, results, cut, type);
+    if (sens !== null && spec !== null) {
+      const j = sens + spec - 1;
+      if (j > bestJ) { bestJ = j; bestCut = cut; }
+    }
+  }
+  return { cutoff: bestCut, youdenJ: bestJ };
+};
+
+const exportCSV = (cases, results, cutoff) => {
+  const header = 'Fall-ID,Datum,Rettungswache,ICH_Prob,LVO_Prob,ICH_CT,LVO_CT,ICH_Korrekt,LVO_Korrekt';
+  const rows = cases.map(c => {
+    const r = results[c.id] || {};
+    const ichCT = r.ich === 'confirmed' ? 'Ja' : r.ich === 'ruled_out' ? 'Nein' : r.ich === 'na' ? 'N/A' : '';
+    const lvoCT = r.lvo === 'confirmed' ? 'Ja' : r.lvo === 'ruled_out' ? 'Nein' : r.lvo === 'na' ? 'N/A' : '';
+    const ichOk = r.ich && r.ich !== 'na' ? (calculateMatch(c.ichProb, r.ich, cutoff).status === 'match' ? 'Ja' : 'Nein') : '';
+    const lvoOk = r.lvo && r.lvo !== 'na' ? (calculateMatch(c.lvoProb, r.lvo, cutoff).status === 'match' ? 'Ja' : 'Nein') : '';
+    return `${c.id},${c.timestamp},"${c.rettungswache}",${c.ichProb},${c.lvoProb},${ichCT},${lvoCT},${ichOk},${lvoOk}`;
+  });
+  const csv = [header, ...rows].join('\n');
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `igfap-export-${todayDE().replace(/\./g, '-')}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+};
+
+// ===================== ANALYTICS PANEL (Research Portal) =====================
+const AnalyticsPanel = ({ cases, results, cutoff }) => {
+  const ichCM = computeConfusion(cases, results, cutoff, 'ich');
+  const lvoCM = computeConfusion(cases, results, cutoff, 'lvo');
+  const ichCal = computeCalibration(cases, results, 'ich');
+  const lvoCal = computeCalibration(cases, results, 'lvo');
+  const ichOpt = findOptimalCutoff(cases, results, 'ich');
+  const lvoOpt = findOptimalCutoff(cases, results, 'lvo');
+
+  const pct = (v) => v !== null ? `${Math.round(v * 100)}%` : '\u2014';
+
+  const ConfusionMatrix = ({ cm, label }) => (
+    <div>
+      <div className="text-sm font-bold mb-2" style={{ color: '#2a2018' }}>{label}</div>
+      {cm.n === 0 ? (
+        <div className="text-xs" style={{ color: '#a09080' }}>Noch keine Daten</div>
+      ) : (
+        <div>
+          <div className="grid grid-cols-3 gap-0.5 text-center text-[10px] font-bold mb-0.5">
+            <div></div>
+            <div style={{ color: '#047857' }}>CT+</div>
+            <div style={{ color: '#b91c1c' }}>CT\u2212</div>
+          </div>
+          <div className="grid grid-cols-3 gap-0.5 text-center">
+            <div className="text-[10px] font-bold flex items-center justify-end pr-1" style={{ color: '#1d4ed8' }}>App+</div>
+            <div className="py-1.5 rounded text-sm font-bold" style={{ background: 'rgba(5,150,105,0.12)', color: '#047857' }}>{cm.tp}</div>
+            <div className="py-1.5 rounded text-sm font-bold" style={{ background: 'rgba(220,38,38,0.08)', color: '#b91c1c' }}>{cm.fp}</div>
+            <div className="text-[10px] font-bold flex items-center justify-end pr-1" style={{ color: '#6b7280' }}>App\u2212</div>
+            <div className="py-1.5 rounded text-sm font-bold" style={{ background: 'rgba(220,38,38,0.08)', color: '#b91c1c' }}>{cm.fn}</div>
+            <div className="py-1.5 rounded text-sm font-bold" style={{ background: 'rgba(5,150,105,0.12)', color: '#047857' }}>{cm.tn}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 mt-3">
+            {[['Sens', cm.sens], ['Spez', cm.spec], ['PPV', cm.ppv], ['NPV', cm.npv]].map(([k, v]) => (
+              <div key={k} className="text-center py-1 rounded" style={{ background: 'rgba(0,0,0,0.03)' }}>
+                <div className="text-[10px] font-bold uppercase" style={{ color: '#8a7a6a' }}>{k}</div>
+                <div className="text-sm font-bold" style={{ color: '#2a2018' }}>{pct(v)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const CalibrationPlot = ({ data, label }) => {
+    const w = 160, h = 100;
+    const hasData = data.some(d => d.rate !== null);
+    return (
+      <div>
+        <div className="text-xs font-bold mb-1" style={{ color: '#5a4a3a' }}>{label} Kalibrierung</div>
+        {!hasData ? <div className="text-[10px]" style={{ color: '#a09080' }}>Noch keine Daten</div> : (
+          <svg width={w} height={h + 20} viewBox={`0 0 ${w} ${h + 20}`}>
+            {/* Diagonal reference */}
+            <line x1="20" y1={h} x2={w - 5} y2="0" stroke="#c0b8b0" strokeWidth="0.5" strokeDasharray="3,3" />
+            {/* Bars showing observed rate */}
+            {data.map((d, i) => {
+              if (d.rate === null) return null;
+              const x = 20 + i * 28;
+              const barH = Math.max(1, (d.rate / 100) * h);
+              return (
+                <g key={i}>
+                  <rect x={x} y={h - barH} width={20} height={barH} rx={2} fill="#2563eb" opacity={0.6} />
+                  <text x={x + 10} y={h + 12} textAnchor="middle" fontSize="7" fill="#8a7a6a">{d.label}</text>
+                  {d.total > 0 && <text x={x + 10} y={h - barH - 3} textAnchor="middle" fontSize="7" fill="#2563eb" fontWeight="bold">{Math.round(d.rate)}%</text>}
+                </g>
+              );
+            })}
+            {/* Y-axis labels */}
+            <text x="16" y="5" textAnchor="end" fontSize="7" fill="#a09080">100</text>
+            <text x="16" y={h / 2 + 3} textAnchor="end" fontSize="7" fill="#a09080">50</text>
+            <text x="16" y={h + 3} textAnchor="end" fontSize="7" fill="#a09080">0</text>
+          </svg>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <GlassCard className="mt-6 rounded-2xl overflow-hidden">
+      <div className="p-3 sm:p-5 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(180,160,140,0.15)' }}>
+        <h2 className="text-base sm:text-lg font-semibold flex items-center gap-2" style={{ color: '#2a2018' }}>
+          <svg className="w-5 h-5" style={{ color: '#1e3a8a' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+          Analytik
+        </h2>
+        <button onClick={() => exportCSV(cases, results, cutoff)}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-105"
+          style={{ background: 'rgba(5,150,105,0.08)', border: '1px solid rgba(5,150,105,0.2)', color: '#047857' }}>
+          CSV Export
+        </button>
+      </div>
+      <div className="p-3 sm:p-5">
+        {/* Confusion Matrices side by side */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
+          <ConfusionMatrix cm={ichCM} label="ICH" />
+          <ConfusionMatrix cm={lvoCM} label="LVO" />
+        </div>
+
+        {/* Calibration plots */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6" style={{ borderTop: '1px solid rgba(180,160,140,0.1)', paddingTop: '16px' }}>
+          <CalibrationPlot data={ichCal} label="ICH" />
+          <CalibrationPlot data={lvoCal} label="LVO" />
+        </div>
+
+        {/* Optimal cutoff suggestions */}
+        {(ichCM.n >= 5 || lvoCM.n >= 5) && (
+          <div style={{ borderTop: '1px solid rgba(180,160,140,0.1)', paddingTop: '12px' }}>
+            <div className="text-xs font-bold uppercase mb-2" style={{ color: '#8a7a6a', letterSpacing: '0.1em' }}>Optimaler Schwellenwert (Youden-J)</div>
+            <div className="flex gap-4">
+              {ichCM.n >= 5 && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(29,78,216,0.06)', border: '1px solid rgba(29,78,216,0.12)' }}>
+                  <span className="text-xs font-bold" style={{ color: '#5a4a3a' }}>ICH:</span>
+                  <span className="text-sm font-bold" style={{ color: '#1d4ed8' }}>{ichOpt.cutoff}%</span>
+                  <span className="text-[10px]" style={{ color: '#8a7a6a' }}>J={ichOpt.youdenJ.toFixed(2)}</span>
+                </div>
+              )}
+              {lvoCM.n >= 5 && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(29,78,216,0.06)', border: '1px solid rgba(29,78,216,0.12)' }}>
+                  <span className="text-xs font-bold" style={{ color: '#5a4a3a' }}>LVO:</span>
+                  <span className="text-sm font-bold" style={{ color: '#1d4ed8' }}>{lvoOpt.cutoff}%</span>
+                  <span className="text-[10px]" style={{ color: '#8a7a6a' }}>J={lvoOpt.youdenJ.toFixed(2)}</span>
+                </div>
+              )}
+            </div>
+            {cutoff !== ichOpt.cutoff && ichCM.n >= 5 && (
+              <div className="text-[10px] mt-2" style={{ color: '#8a7a6a' }}>
+                Aktuell: {cutoff}% &middot; Daten deuten auf {ichOpt.cutoff}% als optimalen ICH-Schwellenwert
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </GlassCard>
+  );
+};
+
 // ===================== RESEARCH PORTAL =====================
 const ResearchPortal = ({ cases, setCases, results, setResults, selectedCase, setSelectedCase, settings, setSettings, stations, onAddStation, onLogout }) => {
   const [showSettings, setShowSettings] = useState(false);
@@ -521,18 +750,35 @@ const ResearchPortal = ({ cases, setCases, results, setResults, selectedCase, se
   const [editValue, setEditValue] = useState('');
   const [editingField, setEditingField] = useState(null); // 'timestamp' | 'rettungswache'
   const [editFieldValue, setEditFieldValue] = useState('');
-  const [newCase, setNewCase] = useState({ id: '', ichProb: 50, lvoProb: 50, rettungswache: '' });
+  const lastStation = cases.length > 0 ? cases[cases.length - 1].rettungswache : '';
+  const [newCase, setNewCase] = useState({ id: '', ichProb: '', lvoProb: '', rettungswache: lastStation });
   const selectedCaseData = cases.find(c => c.id === selectedCase);
   const cutoff = settings.cutoff;
 
-  const handleResultChange = (caseId, type, value) => setResults(prev => ({ ...prev, [caseId]: { ...prev[caseId], [type]: value } }));
+  const handleResultChange = (caseId, type, value) => setResults(prev => {
+    const cur = prev[caseId]?.[type];
+    // Toggle off if clicking the same value (use null, not undefined — Firestore compat)
+    if (cur === value) {
+      const updated = { ...prev[caseId] };
+      delete updated[type];
+      return { ...prev, [caseId]: updated };
+    }
+    return { ...prev, [caseId]: { ...prev[caseId], [type]: value } };
+  });
   const clearResult = (caseId) => setResults(prev => { const n = { ...prev }; delete n[caseId]; return n; });
   const handleAddCase = () => {
     if (!newCase.id.trim()) return;
-    const now = new Date();
-    const ts = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()}`;
-    setCases(prev => [...prev, { id: newCase.id.trim().toUpperCase(), timestamp: ts, rettungswache: newCase.rettungswache || 'Unbekannt', ichProb: newCase.ichProb, lvoProb: newCase.lvoProb }]);
-    setNewCase({ id: '', ichProb: 50, lvoProb: 50, rettungswache: '' }); setShowAddCase(false);
+    const ts = todayDE();
+    const rw = newCase.rettungswache || 'Unbekannt';
+    setCases(prev => [...prev, { id: newCase.id.trim().toUpperCase(), timestamp: ts, rettungswache: rw, ichProb: parseInt(newCase.ichProb) || 0, lvoProb: parseInt(newCase.lvoProb) || 0 }]);
+    // Remember station for next case, reset rest
+    setNewCase({ id: generateCaseId(rw, [...cases, { id: newCase.id.trim().toUpperCase() }]), ichProb: '', lvoProb: '', rettungswache: rw });
+    setShowAddCase(false);
+  };
+  // Auto-generate ID when station changes in the new case form
+  const handleNewCaseStation = (s) => {
+    const autoId = generateCaseId(s, cases);
+    setNewCase(prev => ({ ...prev, rettungswache: s, id: autoId }));
   };
   const handleEditCaseId = (oldId, newId) => {
     if (!newId.trim() || oldId === newId.trim().toUpperCase()) { setEditingCaseId(null); return; }
@@ -581,7 +827,7 @@ const ResearchPortal = ({ cases, setCases, results, setResults, selectedCase, se
                   style={{ background: 'rgba(255,252,248,0.8)', border: '1px solid rgba(180,160,140,0.3)', color: '#2a2018' }} /></div>
               <div><label className="block text-sm font-medium mb-2" style={{ color: '#5a4a3a' }}>Rettungswache</label>
                 <StationSelect value={newCase.rettungswache}
-                  onChange={(s) => setNewCase({ ...newCase, rettungswache: s })}
+                  onChange={handleNewCaseStation}
                   stations={stations} onAddStation={onAddStation} /></div>
               <div><label className="block text-sm font-medium mb-2" style={{ color: '#5a4a3a' }}>ICH-Wahrscheinlichkeit (%)</label>
                 <input type="number" min="0" max="100" value={newCase.ichProb} onChange={(e) => setNewCase({ ...newCase, ichProb: parseInt(e.target.value) || 0 })}
@@ -635,7 +881,12 @@ const ResearchPortal = ({ cases, setCases, results, setResults, selectedCase, se
                 <h2 className="text-base sm:text-lg font-semibold" style={{ color: '#2a2018', letterSpacing: '-0.01em' }}>F&auml;lle</h2>
                 <p className="text-xs sm:text-sm" style={{ color: '#8a7a6a' }}>{cases.filter(c => !results[c.id]?.ich || !results[c.id]?.lvo).length} ausstehend</p>
               </div>
-              <button onClick={() => setShowAddCase(true)} className="px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 text-xs sm:text-sm font-semibold whitespace-nowrap flex-shrink-0"
+              <button onClick={() => {
+                const rw = lastStation;
+                const autoId = rw ? generateCaseId(rw, cases) : '';
+                setNewCase({ id: autoId, ichProb: '', lvoProb: '', rettungswache: rw });
+                setShowAddCase(true);
+              }} className="px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 text-xs sm:text-sm font-semibold whitespace-nowrap flex-shrink-0"
                 style={{ boxShadow: '0 4px 20px rgba(37,99,235,0.3)' }}>+ Neuer Fall</button>
             </div>
             <div className="max-h-[600px] overflow-y-auto">
@@ -897,6 +1148,9 @@ const ResearchPortal = ({ cases, setCases, results, setResults, selectedCase, se
             </GlassCard>
           );
         })()}
+
+        {/* Analytics Panel — confusion matrix, calibration, export */}
+        <AnalyticsPanel cases={cases} results={results} cutoff={cutoff} />
       </div>
     </div>
   );
@@ -997,9 +1251,38 @@ const RettungsdienstScoreboard = ({ cases, results, settings, stations }) => {
           {(() => {
             const stMap = {};
             cases.forEach(c => {
-              if (!stMap[c.rettungswache]) stMap[c.rettungswache] = { name: c.rettungswache, count: 0 };
+              if (!stMap[c.rettungswache]) stMap[c.rettungswache] = { name: c.rettungswache, count: 0, streak: 0, streakBroken: false };
               stMap[c.rettungswache].count++;
             });
+            // Compute streaks: consecutive correct from most recent, per station
+            const stationCases = {};
+            cases.forEach(c => {
+              if (!stationCases[c.rettungswache]) stationCases[c.rettungswache] = [];
+              stationCases[c.rettungswache].push(c);
+            });
+            Object.entries(stationCases).forEach(([name, sCases]) => {
+              let streak = 0;
+              // Walk backwards from newest
+              for (let j = sCases.length - 1; j >= 0; j--) {
+                const c = sCases[j];
+                const r = results[c.id] || {};
+                const ichDone = r.ich && r.ich !== 'na';
+                const lvoDone = r.lvo && r.lvo !== 'na';
+                const lvoNA = r.lvo === 'na';
+                if (!ichDone || (!lvoDone && !lvoNA)) break; // not evaluated yet
+                const ichOk = calculateMatch(c.ichProb, r.ich, cutoff).status === 'match';
+                const lvoOk = lvoDone ? calculateMatch(c.lvoProb, r.lvo, cutoff).status === 'match' : true;
+                if (ichOk && lvoOk) streak++;
+                else break;
+              }
+              if (stMap[name]) stMap[name].streak = streak;
+            });
+            // Badges: milestones
+            const badgeThresholds = [100, 50, 25, 10, 1];
+            const getBadge = (count) => {
+              for (const t of badgeThresholds) { if (count >= t) return t; }
+              return null;
+            };
             const ranked = Object.values(stMap).sort((a, b) => b.count - a.count);
             const max = ranked.length > 0 ? ranked[0].count : 1;
             return ranked.length > 0 && (
@@ -1015,6 +1298,7 @@ const RettungsdienstScoreboard = ({ cases, results, settings, stations }) => {
                 <div className="px-5 sm:px-6 pb-5 sm:pb-6 space-y-2.5">
                   {ranked.map((s, i) => {
                     const barWidth = Math.max(8, Math.round((s.count / max) * 100));
+                    const badge = getBadge(s.count);
                     return (
                       <div key={s.name} className="flex items-center gap-2.5">
                         <span className="text-base font-extrabold w-5 text-right tabular-nums"
@@ -1023,7 +1307,25 @@ const RettungsdienstScoreboard = ({ cases, results, settings, stations }) => {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-0.5">
                             <span className="text-xs sm:text-sm font-semibold truncate" style={{ color: '#2a2018' }}>{s.name}</span>
-                            <div className="flex-shrink-0 ml-2"><FlipCounter value={s.count} /></div>
+                            <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                              {/* Streak indicator */}
+                              {s.streak >= 2 && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                                  style={{ background: 'rgba(234,88,12,0.1)', color: '#c2410c', border: '1px solid rgba(234,88,12,0.2)' }}>
+                                  {s.streak}x
+                                </span>
+                              )}
+                              {/* Badge */}
+                              {badge && badge >= 10 && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                                  style={{ background: badge >= 100 ? 'rgba(234,179,8,0.15)' : badge >= 50 ? 'rgba(168,162,158,0.15)' : 'rgba(180,83,9,0.1)',
+                                    color: badge >= 100 ? '#a16207' : badge >= 50 ? '#57534e' : '#92400e',
+                                    border: `1px solid ${badge >= 100 ? 'rgba(234,179,8,0.3)' : badge >= 50 ? 'rgba(168,162,158,0.3)' : 'rgba(180,83,9,0.2)'}` }}>
+                                  {badge}+
+                                </span>
+                              )}
+                              <FlipCounter value={s.count} />
+                            </div>
                           </div>
                           <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(180,160,140,0.1)' }}>
                             <div className="h-full rounded-full transition-all" style={{
