@@ -1,5 +1,7 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import bgImage from './assets/bg-rettungswagen.jpg';
+import { db } from './firebase';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 
 // ===================== SPLIT-FLAP COUNTER (departure board) =====================
 const FlipDigit = ({ digit }) => {
@@ -1105,29 +1107,59 @@ const RettungsdienstScoreboard = ({ cases, results, settings, stations }) => {
 };
 
 // ===================== APP ROOT =====================
+const FIRESTORE_DOC = doc(db, 'scoreboard', 'data');
+
 export default function App() {
   const [view, setView] = useState(() => localStorage.getItem('igfap_remembered') === 'true' ? 'research' : 'scoreboard');
   const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('igfap_remembered') === 'true');
   const [showLogin, setShowLogin] = useState(false);
-  const [cases, setCases] = useState([
-    { id: 'DRKLB013', timestamp: '13.01.2025', rettungswache: 'DRK Ludwigsburg', ichProb: 78, lvoProb: 34 },
-    { id: 'DRKLB014', timestamp: '13.01.2025', rettungswache: 'DRK Ludwigsburg', ichProb: 45, lvoProb: 82 },
-    { id: 'DRKLB015', timestamp: '13.01.2025', rettungswache: 'DRK Ludwigsburg', ichProb: 62, lvoProb: 58 },
-    { id: 'DRKLB016', timestamp: '12.01.2025', rettungswache: 'DRK Ludwigsburg', ichProb: 23, lvoProb: 91 },
-    { id: 'BRKM087', timestamp: '12.01.2025', rettungswache: 'BRK M\u00fcnchen', ichProb: 88, lvoProb: 15 },
-    { id: 'BRKM088', timestamp: '11.01.2025', rettungswache: 'BRK M\u00fcnchen', ichProb: 31, lvoProb: 28 },
-    { id: 'BRKM089', timestamp: '10.01.2025', rettungswache: 'BRK M\u00fcnchen', ichProb: 94, lvoProb: 67 },
-    { id: 'DRKLB017', timestamp: '10.01.2025', rettungswache: 'DRK Ludwigsburg', ichProb: 12, lvoProb: 73 },
-  ]);
-  const [results, setResults] = useState({
-    'BRKM087': { ich: 'confirmed', lvo: 'ruled_out' },
-    'BRKM088': { ich: 'ruled_out', lvo: 'ruled_out' },
-    'BRKM089': { ich: 'confirmed', lvo: 'confirmed' },
-  });
+  const [loading, setLoading] = useState(true);
+  const [cases, setCases] = useState([]);
+  const [results, setResults] = useState({});
   const [selectedCase, setSelectedCase] = useState(null);
   const [settings, setSettings] = useState({ cutoff: 65, showTimestamp: true, showRettungswache: true });
-  const [stations, setStations] = useState(['DRK Ludwigsburg', 'BRK M\u00fcnchen']);
+  const [stations, setStations] = useState([]);
   const addStation = (name) => { if (name && !stations.includes(name)) setStations(prev => [...prev, name].sort()); };
+
+  // Sync flags: prevent feedback loop (Firestore update → state → save → Firestore update...)
+  const firestoreReady = useRef(false);
+  const skipNextSave = useRef(false);
+  const saveTimer = useRef(null);
+
+  // Real-time listener — loads data on mount and syncs across devices
+  useEffect(() => {
+    const unsub = onSnapshot(FIRESTORE_DOC, (snap) => {
+      skipNextSave.current = true; // Mark: this state change is FROM Firestore, don't save back
+      if (snap.exists()) {
+        const d = snap.data();
+        if (d.cases) setCases(d.cases);
+        if (d.results) setResults(d.results);
+        if (d.stations) setStations(d.stations);
+        if (d.settings) setSettings(d.settings);
+      }
+      firestoreReady.current = true;
+      setLoading(false);
+    }, (err) => {
+      console.error('Firestore listen error:', err);
+      firestoreReady.current = true;
+      setLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  // Debounced save — writes to Firestore 500ms after last LOCAL state change
+  const saveToFirestore = useCallback(() => {
+    if (!firestoreReady.current) return;
+    if (skipNextSave.current) { skipNextSave.current = false; return; }
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      setDoc(FIRESTORE_DOC, { cases, results, stations, settings }).catch(err =>
+        console.error('Firestore save error:', err)
+      );
+    }, 500);
+  }, [cases, results, stations, settings]);
+
+  useEffect(() => { saveToFirestore(); }, [saveToFirestore]);
 
   const LoginModal = () => (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-6"
@@ -1169,6 +1201,21 @@ export default function App() {
       </div>
     );
   };
+
+  // Show loading screen while Firestore data is being fetched
+  if (loading) {
+    return (
+      <div>
+        <BokehBackground />
+        <div className="relative z-10 min-h-screen flex items-center justify-center">
+          <GlassCard depth="hero" className="rounded-3xl p-10 text-center">
+            <StarOfLife size={48} color="#1e3a8a" style={{ margin: '0 auto 16px' }} />
+            <div className="text-lg font-bold" style={{ color: '#2a2018' }}>Daten werden geladen...</div>
+          </GlassCard>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoggedIn && view === 'research') {
     return <ResearchPortal cases={cases} setCases={setCases} results={results} setResults={setResults} selectedCase={selectedCase} setSelectedCase={setSelectedCase} settings={settings} setSettings={setSettings}
